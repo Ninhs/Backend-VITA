@@ -38,7 +38,7 @@ app = FastAPI(
     description="Đọc dữ liệu Supabase, gọi Dify Workflow và trả kết quả cho dashboard.",
 )
 
-allowed_origins = [
+configured_origins = [
     origin.strip()
     for origin in os.getenv(
         "ALLOWED_ORIGINS",
@@ -46,6 +46,9 @@ allowed_origins = [
     ).split(",")
     if origin.strip()
 ]
+# GitHub Pages luôn cần được phép gọi API, kể cả khi ALLOWED_ORIGINS trên
+# môi trường deploy chưa được cấu hình hoặc đang dùng giá trị cũ.
+allowed_origins = list(dict.fromkeys([*configured_origins, "https://ninhs.github.io"]))
 
 app.add_middleware(
     CORSMiddleware,
