@@ -79,6 +79,8 @@ class AnalyzePayload(BaseModel):
 class FounderDecisionPayload(BaseModel):
     founder_decision: Literal["approve", "request_more_info", "reject"]
     external_send_confirmation: Literal["confirm", "cancel"] | None = None
+    decision_id: str | None = None
+    decision_package: str | None = None
 
 
 class LoginPayload(BaseModel):
@@ -93,8 +95,16 @@ def is_authenticated(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+<<<<<<< HEAD
     # CORS preflight không mang cookie đăng nhập; phải cho OPTIONS đi qua để
     # CORSMiddleware trả các header Access-Control-Allow-* cho trình duyệt.
+=======
+    # CORS preflight (OPTIONS) KHÔNG BAO GIỜ mang cookie theo chuẩn trình duyệt.
+    # Nếu để middleware này chặn luôn preflight (do "chưa đăng nhập"), trình duyệt
+    # sẽ coi cả request thật là bị CORS chặn -> báo "Failed to fetch" dù sau đó
+    # request thật (GET/POST) có cookie hợp lệ đi kèm. Phải cho OPTIONS đi qua
+    # thẳng để CORSMiddleware xử lý preflight bình thường.
+>>>>>>> 1060dda (fix: cập nhật backend)
     if request.method == "OPTIONS":
         return await call_next(request)
 
@@ -535,6 +545,10 @@ def run_founder_decision(contract_id: str, payload: FounderDecisionPayload) -> d
     }
     if payload.external_send_confirmation is not None:
         inputs["external_send_confirmation"] = payload.external_send_confirmation
+    if payload.decision_id:
+        inputs["decision_id"] = payload.decision_id
+    if payload.decision_package:
+        inputs["decision_package"] = payload.decision_package
     try:
         response = DifyWorkflowClient(api_key_env="DIFY_API_KEY_2").run_with_inputs(inputs=inputs)
     except DifyClientError as exc:

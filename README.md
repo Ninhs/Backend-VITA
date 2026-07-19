@@ -1,113 +1,82 @@
-# Cách chạy project
-1. Vào extension cài Live Server, Python Debugger (nếu có yêu cầu cầu cài Python thì cài thêm Python)
-2. Chọn view => terminal rồi chạy lần lượt từng đoạn code sau: 
-Nếu chạy lần đầu thì chạy code sau: python -m venv .venv hoặc py -m venv .venv 
-3. python -m pip install -r requirements.txt hoặc py -m pip install -r requirements.txt
-4. python main.py hoặc py main.py
+# OPC AI Agent — Frontend/Backend Integration
 
-### Chức năng của từng file
+## Files
 
-| File | Chức năng |
-|---|---|
-| `main.py` | Khởi tạo FastAPI, kết nối Supabase, cung cấp API và phục vụ giao diện |
-| `dify_client.py` | Gửi dữ liệu sang Dify Workflow và nhận kết quả |
-| `UI/index.html` | Cấu trúc giao diện dashboard |
-| `UI/style.css` | Giao diện, màu sắc và bố cục |
-| `UI/frontend.js` | Gọi API backend và cập nhật dashboard |
-| `.env` | Chứa URL và API key của Supabase, Dify |
-| `requirements.txt` | Danh sách thư viện Python cần cài |
-| `.gitignore` | Ngăn file bí mật và file tạm được đưa lên Git |
+- `Decision & Partner Agent 1_FRONTEND_ALIGNED.yml`
+- `Decision & Partner Agent 2_BACKEND_ALIGNED.yml`
+- `main_FRONTEND_ALIGNED.py`
+- `frontend_FRONTEND_ALIGNED.js`
+- `validate_integration.py`
+- `validation_report.txt`
 
-## 3. Chuẩn bị môi trường
+## What changed
 
-Mở Terminal tại thư mục dự án.
+### Agent 1
 
-### Windows PowerShell
+- Start inputs now match FastAPI: `contract_id`, optional `case_data`.
+- Normal and missing-data branches converge into one End node.
+- End outputs use the exact generic names consumed by the dashboard:
+  `status`, `message`, `decision`, `finance_result`, financial metrics,
+  risk fields, confidence fields, missing fields and Decision package identifiers.
+- The full Decision package is stored in `agent_decisions.output_ref` so Agent 2
+  can recover the latest draft using only `contract_id`.
+- Decision Card contains three reasons, one protective condition, partner option,
+  finance/risk summaries, masking and API/task usage.
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
+### Agent 2
 
-Nếu PowerShell chặn việc kích hoạt môi trường ảo, chạy:
+- Start inputs match the current backend: `contract_id`, `founder_decision`,
+  optional `external_send_confirmation`.
+- `decision_id` and `decision_package` remain optional for direct/manual calls.
+- When they are absent, Agent 2 loads the latest Agent 1 draft audit from
+  `agent_decisions` by `contract_id` and parses `output_ref`.
+- Final outputs include generic aliases (`status`, `message`, `decision`,
+  `approval_status`, `agent_decision`) in addition to the `final_*` audit fields.
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.venv\Scripts\Activate.ps1
-```
+### Optional backend/frontend patches
 
-### Windows Command Prompt
+The supplied backend patch forwards `decision_id` and `decision_package` when the
+browser has them. Agent 2 still works without them by loading the latest audit.
 
-```cmd
-python -m venv .venv
-.venv\Scripts\activate.bat
-```
+The supplied frontend patch:
 
-### macOS hoặc Linux
+- renders the three Agent-generated Decision Card reasons;
+- renders partner/product and protective condition;
+- sends all three Founder actions through Agent 2;
+- forwards the Agent 1 package to Agent 2;
+- updates approval/session status after Agent 2 finishes.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
+## Import order
 
-## 4. Cài thư viện
+1. Publish Data & Finance Agent and Risk & Compliance Agent.
+2. Import and publish `Decision & Partner Agent 1_FRONTEND_ALIGNED.yml`.
+3. Confirm the two internal Dify API keys in Agent 1 point to the published
+   Finance and Risk workflows.
+4. Import and publish `Decision & Partner Agent 2_BACKEND_ALIGNED.yml`.
+5. Replace backend `main.py` with `main_FRONTEND_ALIGNED.py`.
+6. Replace frontend `frontend.js` with `frontend_FRONTEND_ALIGNED.js`.
+7. Set the new Agent 1 and Agent 2 app keys in backend environment variables.
 
-```bash
-python -m pip install -r requirements.txt
-```
+## Required smoke test
 
+1. Run `CON-004` from the dashboard.
+2. Confirm these outputs are non-empty:
+   - `decision`
+   - `finance_result`
+   - `computed_margin`
+   - `maximum_funding_need`
+   - `risk_level`
+   - `decision_id`
+   - `decision_package`
+3. Confirm the dashboard shows three reasons and one protective condition.
+4. Test Founder `approve`, `request_more_info`, and `reject`.
+5. Confirm Agent 2 writes the final row to `decisions` and a row to
+   `human_approvals`.
 
+## Expected CON-004 values
 
-## 12. Các lỗi thường gặp
-
-### `ModuleNotFoundError`
-
-Cài lại thư viện:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Đảm bảo môi trường `.venv` đã được kích hoạt.
-
-### `Thiếu SUPABASE_URL` hoặc `SUPABASE_KEY`
-
-Kiểm tra file `.env` nằm cùng cấp với `main.py` và đã điền đúng giá trị.
-
-### `401 Unauthorized` từ Dify
-
-Kiểm tra:
-
-```env
-DIFY_API_KEY=app-...
-```
-
-API key phải thuộc đúng ứng dụng Dify đã publish.
-
-### `404 Not Found` khi mở giao diện
-
-Nếu backend chỉ khai báo route `/UI`, hãy mở:
-
-```text
-http://127.0.0.1:8000/UI
-```
-
-### CSS hoặc JavaScript không tải
-
-Kiểm tra trong `UI/index.html`:
-
-```html
-<link rel="stylesheet" href="/UI/style.css">
-<script src="/UI/frontend.js" defer></script>
-```
-
-### Lỗi CORS
-
-Nếu frontend chạy bằng Live Server ở cổng `5500`, sửa `.env`:
-
-```env
-ALLOWED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000,http://127.0.0.1:5500,http://localhost:5500
-```
-
-Khởi động lại backend sau khi sửa `.env`.
-
+- Computed margin: approximately `0.24`
+- Target margin: `0.28`
+- Maximum funding need: approximately `710000000`
+- Overall risk: `HIGH` or `CRITICAL` depending on the current Risk package
+- Founder approval required: `true`
