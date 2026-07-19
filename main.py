@@ -93,6 +93,11 @@ def is_authenticated(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    # CORS preflight không mang cookie đăng nhập; phải cho OPTIONS đi qua để
+    # CORSMiddleware trả các header Access-Control-Allow-* cho trình duyệt.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     path = request.url.path
     public_paths = {"/", "/health", "/api/auth/login"}
     public_prefixes = ("/UI/login",)
