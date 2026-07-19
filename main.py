@@ -105,7 +105,18 @@ async def require_login(request: Request, call_next):
     if protected and path not in public_paths and not path.startswith(public_prefixes):
         if not is_authenticated(request):
             if path.startswith("/api/"):
-                return JSONResponse(status_code=401, content={"detail": "Phiên đăng nhập không hợp lệ."})
+                origin = request.headers.get("origin", "")
+                cors_headers = {}
+                if origin in allowed_origins:
+                    cors_headers = {
+                        "Access-Control-Allow-Origin": origin,
+                        "Access-Control-Allow-Credentials": "true",
+                    }
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Phiên đăng nhập không hợp lệ."},
+                    headers=cors_headers,
+                )
             return RedirectResponse(url="/", status_code=303)
     return await call_next(request)
 
@@ -398,8 +409,11 @@ def login(payload: LoginPayload) -> JSONResponse:
     # SameSite=None + Secure=True. Nếu chạy chung 1 origin (local dev), để
     # mặc định "lax" vẫn hoạt động bình thường.
     # Cấu hình qua .env / Render Environment: COOKIE_SAMESITE=none, COOKIE_SECURE=true
-    cookie_samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
-    cookie_secure = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+    is_cross_site_deploy = bool(os.getenv("RENDER"))
+    default_samesite = "none" if is_cross_site_deploy else "lax"
+    default_secure = "true" if is_cross_site_deploy else "false"
+    cookie_samesite = os.getenv("COOKIE_SAMESITE", default_samesite).strip().lower()
+    cookie_secure = os.getenv("COOKIE_SECURE", default_secure).lower() == "true"
     if cookie_samesite == "none" and not cookie_secure:
         # SameSite=None bắt buộc phải đi kèm Secure=True, nếu không trình duyệt sẽ từ chối cookie.
         cookie_secure = True
