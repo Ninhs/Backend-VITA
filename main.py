@@ -4,7 +4,9 @@ Luồng chính:
 Frontend -> FastAPI -> Supabase -> Dify -> FastAPI -> Frontend/Terminal
 """
 
+
 from __future__ import annotations
+
 
 import hashlib
 import json
@@ -17,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,21 +27,26 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from supabase import Client, create_client
 
+
 BASE_DIR = Path(__file__).resolve().parent
 UI_DIR = BASE_DIR / "UI"
+
 
 # Ưu tiên cấu hình bí mật cục bộ, sau đó mới nạp cấu hình chung.
 # Biến môi trường của hệ điều hành vẫn có độ ưu tiên cao nhất.
 load_dotenv(BASE_DIR / ".env.local")
 load_dotenv(BASE_DIR / ".env")
 
+
 from dify_client import DifyClientError, DifyWorkflowClient, extract_outputs
+
 
 app = FastAPI(
     title="OPC AI Agent Backend",
     version="1.0.0",
     description="Đọc dữ liệu Supabase, gọi Dify Workflow và trả kết quả cho dashboard.",
 )
+
 
 allowed_origins = [
     origin.strip()
@@ -49,6 +57,7 @@ allowed_origins = [
     if origin.strip()
 ]
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -56,6 +65,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 _supabase: Client | None = None
 _supabase_write: Client | None = None
@@ -85,6 +95,8 @@ _auth_token = _raw_auth_secret or secrets.token_urlsafe(32)
 AUTH_COOKIE = "vita_session"
 
 
+
+
 class DecisionPayload(BaseModel):
     decision: Literal["ACCEPT", "REQUEST_MORE_DATA", "REJECT"]
     workflow_run_id: str | None = None
@@ -93,14 +105,24 @@ class DecisionPayload(BaseModel):
     source: str = "opc-web-dashboard"
 
 
+
+
 class AnalyzePayload(BaseModel):
     supplemental_data: dict[str, Any] = Field(default_factory=dict)
     skip_missing_data: bool = False
 
 
+
+
 class FounderDecisionPayload(BaseModel):
     founder_decision: Literal["approve", "request_more_info", "reject"]
     external_send_confirmation: Literal["confirm", "cancel"] | None = None
+    decision_id: str | None = None
+    case_id: str | None = None
+    trace_id: str | None = None
+    decision_package: dict[str, Any] | str | None = None
+
+
 
 
 class LoginPayload(BaseModel):
@@ -108,8 +130,11 @@ class LoginPayload(BaseModel):
     password: str
 
 
+
+
 class NewCustomerPayload(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
+
 
     customer_name: str = Field(min_length=1, max_length=250)
     customer_type: Literal["SME", "Cooperative", "Household"]
@@ -120,8 +145,11 @@ class NewCustomerPayload(BaseModel):
     revenue_model: str | None = Field(default=None, max_length=150)
 
 
+
+
 class NewContractDetails(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
+
 
     # Các cột tiền trong Supabase là bigint, phải giữ kiểu số nguyên.
     contract_value: int = Field(gt=0)
@@ -136,6 +164,7 @@ class NewContractDetails(BaseModel):
     ]
     description: str | None = Field(default=None, max_length=1000)
 
+
     @model_validator(mode="after")
     def validate_date_range(self) -> "NewContractDetails":
         if self.end_date < self.start_date:
@@ -143,8 +172,11 @@ class NewContractDetails(BaseModel):
         return self
 
 
+
+
 class NewOrderDetails(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
+
 
     order_revenue: int = Field(ge=0)
     estimated_cost: int = Field(ge=0)
@@ -152,19 +184,24 @@ class NewOrderDetails(BaseModel):
     service_id: str | None = Field(default=None, max_length=50)
     delivery_note: str | None = Field(default=None, max_length=1000)
 
+
     @field_validator("service_id")
     @classmethod
     def normalize_service_id(cls, value: str | None) -> str | None:
         return value.strip().upper() if value and value.strip() else None
 
 
+
+
 class CreateContractPayload(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
+
 
     customer_id: str | None = Field(default=None, max_length=50)
     new_customer: NewCustomerPayload | None = None
     contract: NewContractDetails
     order: NewOrderDetails
+
 
     @field_validator("customer_id")
     @classmethod
@@ -174,6 +211,7 @@ class CreateContractPayload(BaseModel):
             raise ValueError("customer_id phải có dạng CUS-...")
         return normalized
 
+
     @model_validator(mode="after")
     def validate_customer_choice(self) -> "CreateContractPayload":
         if bool(self.customer_id) == bool(self.new_customer):
@@ -181,9 +219,13 @@ class CreateContractPayload(BaseModel):
         return self
 
 
+
+
 def is_authenticated(request: Request) -> bool:
     token = request.cookies.get(AUTH_COOKIE, "")
     return bool(token) and hmac.compare_digest(token, _auth_token)
+
+
 
 
 def cors_headers_for(request: Request) -> dict[str, str]:
@@ -199,8 +241,12 @@ def cors_headers_for(request: Request) -> dict[str, str]:
     return headers
 
 
+
+
 def cors_json_response(request: Request, status_code: int, content: dict[str, Any]) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=content, headers=cors_headers_for(request))
+
+
 
 
 @app.middleware("http")
@@ -209,8 +255,10 @@ async def require_login(request: Request, call_next):
     public_paths = {"/", "/health", "/api/auth/login"}
     public_prefixes = ("/UI/login",)
 
+
     if request.method == "OPTIONS":
         return cors_json_response(request, 200, {"ok": True})
+
 
     protected = path == "/dashboard" or path.startswith("/api/")
     if protected and path not in public_paths and not path.startswith(public_prefixes):
@@ -221,11 +269,15 @@ async def require_login(request: Request, call_next):
     return await call_next(request)
 
 
+
+
 def required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value or "YOUR_" in value:
         raise RuntimeError(f"Thiếu hoặc chưa cấu hình {name} trong file .env")
     return value
+
+
 
 
 def get_supabase_client() -> Client:
@@ -236,6 +288,8 @@ def get_supabase_client() -> Client:
             required_env("SUPABASE_KEY"),
         )
     return _supabase
+
+
 
 
 def supabase_write_key() -> str:
@@ -254,12 +308,16 @@ def supabase_write_key() -> str:
     )
 
 
+
+
 def supabase_write_is_configured() -> bool:
     try:
         supabase_write_key()
     except RuntimeError:
         return False
     return True
+
+
 
 
 def get_supabase_write_client() -> Client:
@@ -272,17 +330,25 @@ def get_supabase_write_client() -> Client:
     return _supabase_write
 
 
+
+
 def contract_table() -> str:
     return os.getenv("SUPABASE_CONTRACT_TABLE", "contracts").strip()
+
+
 
 
 def contract_id_column() -> str:
     return os.getenv("SUPABASE_CONTRACT_ID_COLUMN", "contract_id").strip()
 
 
+
+
 def credit_profile_table() -> str:
     """API table name for the 10_CREDIT_PROFILE business dataset."""
     return os.getenv("SUPABASE_CREDIT_PROFILE_TABLE", "credit_profile").strip()
+
+
 
 
 def normalize_contract_id(contract_id: str) -> str:
@@ -292,9 +358,13 @@ def normalize_contract_id(contract_id: str) -> str:
     return normalized
 
 
+
+
 RR002_DESCRIPTION = (
     "Dòng tiền cuối kỳ dự kiến thấp hơn mức dự trữ tiền mặt tối thiểu."
 )
+
+
 
 
 def parse_output_mapping(value: Any) -> dict[str, Any]:
@@ -307,6 +377,8 @@ def parse_output_mapping(value: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
 
 
 def normalize_month_list(value: Any) -> list[str]:
@@ -326,12 +398,15 @@ def normalize_month_list(value: Any) -> list[str]:
     return [str(month).strip() for month in value if str(month).strip()]
 
 
+
+
 def build_rr002_assessment(outputs: dict[str, Any]) -> dict[str, Any]:
     """Chuẩn hóa kết quả RR-002 để terminal và giao diện dùng cùng một diễn giải."""
     decision = parse_output_mapping(outputs.get("decision"))
     finance = parse_output_mapping(outputs.get("finance_result"))
     summary = parse_output_mapping(decision.get("summary"))
     cashflow_summary = parse_output_mapping(finance.get("cashflow_summary"))
+
 
     candidates = (
         outputs.get("months_below_reserve"),
@@ -346,12 +421,15 @@ def build_rr002_assessment(outputs: dict[str, Any]) -> dict[str, Any]:
         if months:
             break
 
+
     return {
         "rule_id": "RR-002",
         "violated": bool(months),
         "description": RR002_DESCRIPTION,
         "months": months,
     }
+
+
 
 
 def print_rr002_assessment(assessment: dict[str, Any]) -> None:
@@ -361,6 +439,8 @@ def print_rr002_assessment(assessment: dict[str, Any]) -> None:
     print(f"Nội dung: {assessment['description']}")
     if assessment["months"]:
         print(f"Tháng vi phạm: {', '.join(assessment['months'])}")
+
+
 
 
 SENSITIVE_LOG_FIELDS = {
@@ -382,6 +462,8 @@ SENSITIVE_LOG_FIELDS = {
 }
 
 
+
+
 def mask_customer_id(value: Any) -> str:
     text = str(value).strip().upper()
     if "-" in text:
@@ -390,10 +472,14 @@ def mask_customer_id(value: Any) -> str:
     return f"{text[:3]}-***{text[-3:]}"
 
 
+
+
 def mask_account_id(value: Any) -> str:
     text = str(value).strip().upper()
     prefix = text.split("_", 1)[0] if "_" in text else text[:3]
     return f"{prefix}_****"
+
+
 
 
 def mask_company_name(value: Any) -> str:
@@ -404,7 +490,10 @@ def mask_company_name(value: Any) -> str:
             return word
         return core[0] + ("*" * (len(core) - 1)) + punctuation
 
+
     return " ".join(mask_word(word) for word in str(value).strip().split())
+
+
 
 
 def tokenize_audit_value(field: str, value: Any) -> str:
@@ -417,6 +506,8 @@ def tokenize_audit_value(field: str, value: Any) -> str:
         hashlib.sha256,
     ).hexdigest()[:8].upper()
     return f"TOK-{namespace}-{digest}"
+
+
 
 
 def bucket_contract_value(value: Any) -> str:
@@ -437,11 +528,15 @@ def bucket_contract_value(value: Any) -> str:
     return f"{million.quantize(Decimal('1'))}M VND"
 
 
+
+
 def safe_original_for_log(field: str, value: Any) -> Any:
     """Không bao giờ ghi bí mật dạng rõ, kể cả trong cột 'trước masking'."""
     if field in SENSITIVE_LOG_FIELDS:
         return None
     return value
+
+
 
 
 def masked_log_value(field: str, value: Any) -> Any:
@@ -456,6 +551,8 @@ def masked_log_value(field: str, value: Any) -> Any:
     if field in SENSITIVE_LOG_FIELDS:
         return "[SECRET]"
     return value
+
+
 
 
 def collect_masking_rows(value: Any, path: str = "payload") -> list[dict[str, Any]]:
@@ -498,6 +595,8 @@ def collect_masking_rows(value: Any, path: str = "payload") -> list[dict[str, An
     return rows
 
 
+
+
 def collect_backend_secret_rows() -> list[dict[str, Any]]:
     """Liệt kê bí mật backend ở dạng đã redaction, không đưa giá trị vào row/log."""
     configured_secrets = {
@@ -525,6 +624,8 @@ def collect_backend_secret_rows() -> list[dict[str, Any]]:
     ]
 
 
+
+
 def print_masking_audit(contract_id: str, case_data: dict[str, Any]) -> None:
     rows = collect_masking_rows(case_data) + collect_backend_secret_rows()
     print("\n" + "=" * 72)
@@ -544,6 +645,8 @@ def print_masking_audit(contract_id: str, case_data: dict[str, Any]) -> None:
     print("=" * 72 + "\n")
 
 
+
+
 def fetch_contract(contract_id: str) -> dict[str, Any] | None:
     response = (
         get_supabase_client()
@@ -556,8 +659,11 @@ def fetch_contract(contract_id: str) -> dict[str, Any] | None:
     return response.data[0] if response.data else None
 
 
+
+
 def fetch_related_data(contract_id: str, customer_id: str | None = None) -> tuple[dict[str, list[Any]], list[str]]:
     """Đọc các bảng liên quan nhưng không làm hỏng toàn bộ request nếu một bảng chưa có."""
+
 
     table_names = [
         name.strip()
@@ -581,14 +687,17 @@ def fetch_related_data(contract_id: str, customer_id: str | None = None) -> tupl
     if "customers" not in table_names:
         table_names.append("customers")
 
+
     # Bảng được đặt tên 10_CREDIT_PROFILE trong tài liệu nghiệp vụ, còn tên API
     # mặc định trên Supabase là credit_profile.
     profile_table = credit_profile_table()
     if profile_table and profile_table not in table_names:
         table_names.append(profile_table)
 
+
     related: dict[str, list[Any]] = {}
     warnings: list[str] = []
+
 
     for table_name in table_names:
         try:
@@ -624,10 +733,14 @@ def fetch_related_data(contract_id: str, customer_id: str | None = None) -> tupl
             related[table_name] = []
             warnings.append(f"Không đọc được bảng {table_name}: {exc}")
 
+
     # Giữ một key ổn định cho frontend ngay cả khi tên bảng được cấu hình khác.
     related["credit_profile"] = related.get(profile_table, [])
 
+
     return related, warnings
+
+
 
 
 def build_case_data(contract_id: str, contract: dict[str, Any]) -> dict[str, Any]:
@@ -639,6 +752,8 @@ def build_case_data(contract_id: str, contract: dict[str, Any]) -> dict[str, Any
         "related_data": related_data,
         "source_warnings": warnings,
     }
+
+
 
 
 def next_prefixed_id(table_name: str, column_name: str, prefix: str) -> str:
@@ -659,6 +774,8 @@ def next_prefixed_id(table_name: str, column_name: str, prefix: str) -> str:
     return f"{prefix}-{max(numbers, default=0) + 1:03d}"
 
 
+
+
 def fetch_one_by_id(table_name: str, column_name: str, value: str) -> dict[str, Any] | None:
     response = (
         get_supabase_client()
@@ -671,8 +788,12 @@ def fetch_one_by_id(table_name: str, column_name: str, value: str) -> dict[str, 
     return response.data[0] if response.data else None
 
 
+
+
 def without_none(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if value is not None}
+
+
 
 
 def rollback_created_rows(rows: list[tuple[str, str, str]]) -> list[str]:
@@ -692,6 +813,8 @@ def rollback_created_rows(rows: list[tuple[str, str, str]]) -> list[str]:
     return errors
 
 
+
+
 # -----------------------------------------------------------------------------
 # Phục vụ frontend cùng origin với backend
 # -----------------------------------------------------------------------------
@@ -699,9 +822,11 @@ def rollback_created_rows(rows: list[tuple[str, str, str]]) -> list[str]:
 def add_contract_html() -> FileResponse:
     return FileResponse(UI_DIR / "add_contract.html")
 
+
 @app.get("/UI/add_contract.js", include_in_schema=False)
 def add_contract_js() -> FileResponse:
     return FileResponse(UI_DIR / "add_contract.js", media_type="application/javascript")
+
 
 @app.get("/", include_in_schema=False)
 def login_page(request: Request):
@@ -710,9 +835,13 @@ def login_page(request: Request):
     return FileResponse(UI_DIR / "login.html")
 
 
+
+
 @app.get("/dashboard", include_in_schema=False)
 def frontend_page() -> FileResponse:
     return FileResponse(UI_DIR / "index.html")
+
+
 
 
 @app.get("/UI/login.css", include_in_schema=False)
@@ -720,14 +849,20 @@ def login_css() -> FileResponse:
     return FileResponse(UI_DIR / "login.css", media_type="text/css")
 
 
+
+
 @app.get("/UI/login.js", include_in_schema=False)
 def login_js() -> FileResponse:
     return FileResponse(UI_DIR / "login.js", media_type="application/javascript")
 
 
+
+
 @app.get("/UI/style.css", include_in_schema=False)
 def frontend_css() -> FileResponse:
     return FileResponse(UI_DIR / "style.css", media_type="text/css")
+
+
 
 
 @app.get("/UI/frontend.js", include_in_schema=False)
@@ -738,14 +873,20 @@ def frontend_js() -> FileResponse:
     )
 
 
+
+
 # -----------------------------------------------------------------------------
 # API
 # -----------------------------------------------------------------------------
 
 
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
 
 
 @app.post("/api/auth/login")
@@ -773,11 +914,15 @@ def login(payload: LoginPayload) -> JSONResponse:
     return response
 
 
+
+
 @app.post("/api/auth/logout")
 def logout() -> JSONResponse:
     response = JSONResponse({"success": True})
     response.delete_cookie(AUTH_COOKIE)
     return response
+
+
 
 
 @app.get("/api/contracts")
@@ -794,6 +939,8 @@ def list_contracts() -> dict[str, Any]:
         return {"data": response.data or []}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Lỗi Supabase: {exc}") from exc
+
+
 
 
 @app.get("/api/new-contract/options")
@@ -835,6 +982,8 @@ def new_contract_options() -> dict[str, Any]:
         ) from exc
 
 
+
+
 @app.post("/api/contracts", status_code=201)
 def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
     """Tạo Customer (nếu cần), Contract và Order theo schema trong form Excel."""
@@ -843,6 +992,7 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     created_rows: list[tuple[str, str, str]] = []
+
 
     try:
         if payload.customer_id:
@@ -864,6 +1014,7 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
             })
             created_new_customer = True
 
+
         if payload.order.service_id and not fetch_one_by_id(
             "products", "service_id", payload.order.service_id
         ):
@@ -871,6 +1022,7 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
                 status_code=400,
                 detail=f"Không tìm thấy service_id {payload.order.service_id} trong bảng products",
             )
+
 
         contract_id = next_prefixed_id(
             contract_table(), contract_id_column(), "CON"
@@ -894,15 +1046,19 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
             "delivery_note": payload.order.delivery_note,
         })
 
+
         if created_new_customer:
             client.table("customers").insert(customer).execute()
             created_rows.append(("customers", "customer_id", customer_id))
 
+
         client.table(contract_table()).insert(contract_record).execute()
         created_rows.append((contract_table(), contract_id_column(), contract_id))
 
+
         client.table("orders").insert(order_record).execute()
         created_rows.append(("orders", "order_id", order_id))
+
 
     except HTTPException:
         raise
@@ -913,6 +1069,7 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
             detail += f". Cần kiểm tra dữ liệu trung gian: {'; '.join(rollback_errors)}"
         status_code = 409 if "23505" in str(exc) or "duplicate" in str(exc).lower() else 500
         raise HTTPException(status_code=status_code, detail=detail) from exc
+
 
     return {
         "success": True,
@@ -926,6 +1083,8 @@ def create_contract(payload: CreateContractPayload) -> dict[str, Any]:
     }
 
 
+
+
 @app.get("/api/contracts/{contract_id}")
 def get_contract(contract_id: str) -> dict[str, Any]:
     contract_id = normalize_contract_id(contract_id)
@@ -934,25 +1093,32 @@ def get_contract(contract_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Lỗi Supabase: {exc}") from exc
 
+
     if contract is None:
         raise HTTPException(
             status_code=404,
             detail=f"Không tìm thấy hợp đồng {contract_id}",
         )
 
+
     return {"data": contract}
+
+
 
 
 @app.post("/api/agent/analyze/{contract_id}")
 def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) -> dict[str, Any]:
     """Lấy hợp đồng từ Supabase, gửi sang Dify và in outputs ra Terminal."""
 
+
     contract_id = normalize_contract_id(contract_id)
+
 
     try:
         contract = fetch_contract(contract_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Lỗi Supabase: {exc}") from exc
+
 
     if contract is None:
         raise HTTPException(
@@ -960,7 +1126,9 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
             detail=f"Không tìm thấy hợp đồng {contract_id}",
         )
 
+
     case_data = build_case_data(contract_id, contract)
+
 
     # Đã sửa: Cho dù Agent lỗi, vẫn gửi dữ liệu tĩnh về giao diện
     try:
@@ -977,6 +1145,7 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
         )
         outputs = extract_outputs(dify_response)
 
+
         print("\n" + "=" * 72)
         print(f"KẾT QUẢ DIFY CHO {contract_id}")
         print("=" * 72)
@@ -985,6 +1154,7 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
         print("-" * 72)
         print_rr002_assessment(rr002_assessment)
         print("=" * 72 + "\n")
+
 
     except Exception as exc:  # Bắt mọi lỗi từ Dify (chưa có key, timeout, v.v.)
         print(f"⚠️ Dify Agent chưa sẵn sàng hoặc lỗi: {exc}")
@@ -996,6 +1166,7 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
         }
         rr002_assessment = build_rr002_assessment(outputs)
 
+
     return {
         "contract": contract,
         "case_data": case_data,
@@ -1003,6 +1174,8 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
         "compliance": {"rr_002": rr002_assessment},
         "dify_response": dify_response,
     }
+
+
 
 
 @app.post("/api/agent/founder-decision/{contract_id}")
@@ -1013,13 +1186,23 @@ def run_founder_decision(contract_id: str, payload: FounderDecisionPayload) -> d
         "contract_id": contract_id,
         "founder_decision": payload.founder_decision,
     }
-    if payload.external_send_confirmation is not None:
-        inputs["external_send_confirmation"] = payload.external_send_confirmation
+    optional_inputs = {
+        "external_send_confirmation": payload.external_send_confirmation,
+        "decision_id": payload.decision_id,
+        "case_id": payload.case_id,
+        "trace_id": payload.trace_id,
+        "decision_package": payload.decision_package,
+    }
+    for key, value in optional_inputs.items():
+        if value is not None and value != "":
+            inputs[key] = value
     try:
         response = DifyWorkflowClient(api_key_env="DIFY_API_KEY_2").run_with_inputs(inputs=inputs)
     except DifyClientError as exc:
         raise HTTPException(status_code=502, detail=f"Agent 2 lỗi: {exc}") from exc
     return {"outputs": extract_outputs(response), "dify_response": response}
+
+
 
 
 @app.post("/api/contracts/{contract_id}/decision")
@@ -1029,8 +1212,10 @@ def save_decision(
 ) -> dict[str, Any]:
     """Lưu lựa chọn Chấp nhận/Thêm dữ liệu/Từ chối vào Supabase."""
 
+
     contract_id = normalize_contract_id(contract_id)
     table_name = os.getenv("SUPABASE_DECISION_TABLE", "agent_decisions").strip()
+
 
     record = {
         "contract_id": contract_id,
@@ -1041,8 +1226,10 @@ def save_decision(
         "source": payload.source,
     }
 
+
     # Không gửi field None để tránh lỗi với schema không có default phù hợp.
     record = {key: value for key, value in record.items() if value is not None}
+
 
     try:
         response = (
@@ -1060,6 +1247,7 @@ def save_decision(
             ),
         ) from exc
 
+
     return {
         "success": True,
         "message": "Đã lưu quyết định",
@@ -1067,8 +1255,11 @@ def save_decision(
     }
 
 
+
+
 if __name__ == "__main__":
     import uvicorn
+
 
     uvicorn.run(
         "main:app",
