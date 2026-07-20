@@ -928,7 +928,11 @@ def logout() -> JSONResponse:
 def is_abnormal_bank_transaction(row: dict[str, Any]) -> bool:
     """Phân loại giao dịch bất thường độc lập với kết quả của các Agent."""
     try:
-        risk_score = float(row.get("risk_score") or 0)
+        risk_score = float(
+            row.get("transaction_risk_score")
+            or row.get("risk_score")
+            or 0
+        )
     except (TypeError, ValueError):
         risk_score = 0.0
 
@@ -943,6 +947,7 @@ def is_abnormal_bank_transaction(row: dict[str, Any]) -> bool:
     status_text = " ".join(
         str(row.get(field) or "")
         for field in (
+            "txn_status",
             "status",
             "risk_status",
             "fraud_flag",
