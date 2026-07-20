@@ -186,16 +186,37 @@ def is_authenticated(request: Request) -> bool:
     return bool(token) and hmac.compare_digest(token, _auth_token)
 
 
+def cors_headers_for(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin", "")
+    headers: dict[str, str] = {"Vary": "Origin"}
+    if origin and origin in allowed_origins:
+        headers.update({
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            "Access-Control-Allow-Headers": request.headers.get("access-control-request-headers", "Content-Type"),
+        })
+    return headers
+
+
+def cors_json_response(request: Request, status_code: int, content: dict[str, Any]) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content=content, headers=cors_headers_for(request))
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
     public_paths = {"/", "/health", "/api/auth/login"}
     public_prefixes = ("/UI/login",)
+
+    if request.method == "OPTIONS":
+        return cors_json_response(request, 200, {"ok": True})
+
     protected = path == "/dashboard" or path.startswith("/api/")
     if protected and path not in public_paths and not path.startswith(public_prefixes):
         if not is_authenticated(request):
             if path.startswith("/api/"):
-                return JSONResponse(status_code=401, content={"detail": "Phiên đăng nhập không hợp lệ."})
+                return cors_json_response(request, 401, {"detail": "Phiên đăng nhập không hợp lệ."})
             return RedirectResponse(url="/", status_code=303)
     return await call_next(request)
 
