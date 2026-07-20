@@ -723,7 +723,12 @@ def login(payload: LoginPayload) -> JSONResponse:
         key=AUTH_COOKIE,
         value=_auth_token,
         httponly=True,
-        samesite="lax",
+        # QUAN TRỌNG khi frontend (GitHub Pages) và backend (Render) khác
+        # domain: SameSite phải là "none" (kèm Secure=true), nếu không trình
+        # duyệt sẽ KHÔNG gửi cookie này trên các request fetch() cross-site,
+        # khiến mọi API sau khi đăng nhập đều trả 401 dù login thành công.
+        # Đặt COOKIE_SAMESITE=none và COOKIE_SECURE=true trong .env trên Render.
+        samesite=os.getenv("COOKIE_SAMESITE", "lax").strip().lower(),
         secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
         max_age=8 * 60 * 60,
     )
