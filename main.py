@@ -925,6 +925,70 @@ def logout() -> JSONResponse:
 
 
 
+def is_abnormal_bank_transaction(row: dict[str, Any]) -> bool:
+    """Phân loại giao dịch bất thường độc lập với kết quả của các Agent."""
+    try:
+        risk_score = float(row.get("risk_score") or 0)
+    except (TypeError, ValueError):
+        risk_score = 0.0
+
+    suspicious_value = row.get("is_suspicious")
+    if isinstance(suspicious_value, str):
+        is_suspicious = suspicious_value.strip().lower() in {
+            "true", "1", "yes", "y",
+        }
+    else:
+        is_suspicious = bool(suspicious_value)
+
+    status_text = " ".join(
+        str(row.get(field) or "")
+        for field in (
+            "status",
+            "risk_status",
+            "fraud_flag",
+            "flag",
+            "classification",
+        )
+    ).lower()
+
+    return (
+        risk_score >= 85
+        or is_suspicious
+        or any(
+            marker in status_text
+            for marker in ("suspicious", "fraud", "abnormal", "critical")
+        )
+    )
+
+
+@app.get("/api/bank-transactions/anomalies")
+def list_abnormal_bank_transactions() -> dict[str, Any]:
+    """Đếm giao dịch bất thường trực tiếp từ bank_transactions."""
+    try:
+        response = (
+            get_supabase_client()
+            .table("bank_transactions")
+            .select("*")
+            .limit(1000)
+            .execute()
+        )
+        rows = response.data or []
+        anomalies = [
+            row for row in rows
+            if isinstance(row, dict) and is_abnormal_bank_transaction(row)
+        ]
+        return {
+            "data": anomalies,
+            "count": len(anomalies),
+            "source": "bank_transactions",
+            "risk_score_threshold": 85,
+        }
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi đọc bank_transactions: {exc}",
+        ) from exc
+
 @app.get("/api/contracts")
 def list_contracts() -> dict[str, Any]:
     try:
