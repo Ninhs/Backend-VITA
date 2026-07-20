@@ -64,7 +64,24 @@ _supabase_write: Client | None = None
 # nên cookie đăng nhập cũ lập tức bị coi là không hợp lệ ngay cả khi người
 # dùng vừa đăng nhập đúng tài khoản/mật khẩu -> bị bật ngược về trang login.
 # Nếu đặt VITA_AUTH_SECRET trong .env, token sẽ cố định qua các lần reload.
-_auth_token = os.getenv("VITA_AUTH_SECRET", "").strip() or secrets.token_urlsafe(32)
+#
+# VITA_AUTH_SECRET được dùng TRỰC TIẾP làm giá trị cookie, nên BẮT BUỘC chỉ
+# gồm ký tự ASCII (theo RFC 6265, cookie không được phép chứa ký tự có dấu/
+# Unicode). Nếu lỡ đặt chuỗi có dấu tiếng Việt, cookie có thể bị trình duyệt/
+# proxy đọc sai khi round-trip, khiến người dùng đăng nhập đúng nhưng vẫn bị
+# bật về trang login liên tục -> ở đây tự phát hiện và cảnh báo rõ thay vì để
+# lỗi âm thầm.
+_raw_auth_secret = os.getenv("VITA_AUTH_SECRET", "").strip()
+if _raw_auth_secret and not _raw_auth_secret.isascii():
+    print(
+        "[CẢNH BÁO] VITA_AUTH_SECRET chứa ký tự ngoài ASCII (có dấu/Unicode) — "
+        "cookie đăng nhập có thể bị lỗi khi round-trip qua trình duyệt/proxy. "
+        "Đổi VITA_AUTH_SECRET sang chuỗi chỉ gồm chữ cái/số/gạch ngang thường "
+        "(vd: vita-mistalent-2026-fixed-token). Tạm thời dùng token ngẫu nhiên "
+        "thay thế cho lần chạy này."
+    )
+    _raw_auth_secret = ""
+_auth_token = _raw_auth_secret or secrets.token_urlsafe(32)
 AUTH_COOKIE = "vita_session"
 
 
