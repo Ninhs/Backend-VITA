@@ -677,7 +677,7 @@ def fetch_related_data(contract_id: str, customer_id: str | None = None) -> tupl
         name.strip()
         for name in os.getenv(
             "SUPABASE_GLOBAL_RELATED_TABLES",
-            "bank_transactions,opc_profile",
+            "bank_transactions,opc_profile,cashflow",
         ).split(",")
         if name.strip()
     }
