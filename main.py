@@ -59,7 +59,12 @@ app.add_middleware(
 
 _supabase: Client | None = None
 _supabase_write: Client | None = None
-_auth_token = secrets.token_urlsafe(32)
+# QUAN TRỌNG: main.py chạy uvicorn với reload=True (tự khởi động lại khi có
+# file thay đổi). Trước đây _auth_token được sinh ngẫu nhiên MỖI LẦN reload,
+# nên cookie đăng nhập cũ lập tức bị coi là không hợp lệ ngay cả khi người
+# dùng vừa đăng nhập đúng tài khoản/mật khẩu -> bị bật ngược về trang login.
+# Nếu đặt VITA_AUTH_SECRET trong .env, token sẽ cố định qua các lần reload.
+_auth_token = os.getenv("VITA_AUTH_SECRET", "").strip() or secrets.token_urlsafe(32)
 AUTH_COOKIE = "vita_session"
 
 
@@ -1026,5 +1031,7 @@ if __name__ == "__main__":
         "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
-        reload=True,
+        # Tắt bằng VITA_RELOAD=false trong .env khi live demo, để tránh việc
+        # server tự khởi động lại giữa chừng làm mất phiên đăng nhập.
+        reload=os.getenv("VITA_RELOAD", "true").strip().lower() != "false",
     )
