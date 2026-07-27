@@ -943,6 +943,7 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
             case_data=case_data,
             extra_inputs={
                 "approve300": payload.approve300 if payload else False,
+                "action": "prepare",
             },
         )
         outputs = extract_outputs(dify_response)
@@ -982,6 +983,8 @@ def run_founder_decision(contract_id: str, payload: FounderDecisionPayload) -> d
     inputs: dict[str, Any] = {
         "contract_id": contract_id,
         "founder_decision": payload.founder_decision,
+        "action": "finalize",
+        "external_send_confirmation": payload.external_send_confirmation or "not_applicable",
     }
     try:
         response = DifyWorkflowClient(api_key_env="DIFY_API_KEY_2").run_with_inputs(inputs=inputs)
