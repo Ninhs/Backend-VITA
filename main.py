@@ -183,6 +183,13 @@ def is_authenticated(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
+    # Luôn cho preflight OPTIONS đi qua thẳng để CORSMiddleware xử lý và gắn
+    # đúng header Access-Control-Allow-Origin — nếu không, mọi route yêu cầu
+    # đăng nhập (vd /api/contracts) sẽ bị middleware này trả 401 trước khi
+    # tới được CORSMiddleware, khiến trình duyệt luôn báo "blocked by CORS".
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     path = request.url.path
     public_paths = {"/", "/health", "/api/auth/login"}
     public_prefixes = ("/UI/login",)
