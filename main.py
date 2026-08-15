@@ -40,30 +40,6 @@ app = FastAPI(
     description="Đọc dữ liệu Supabase, gọi Dify Workflow và trả kết quả cho dashboard.",
 )
 
-allowed_origins = [
-    origin.strip()
-    for origin in os.getenv(
-        "ALLOWED_ORIGINS",
-        "http://127.0.0.1:8000,http://localhost:8000",
-    ).split(",")
-    if origin.strip()
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    # Cho phép mọi preview deployment của riêng project Vercel này
-    # (dạng https://opc-ai-agent-dashboard-<hash>-ninhs-projects-....vercel.app),
-    # chứ không phải mọi domain *.vercel.app trên đời — vẫn an toàn.
-    allow_origin_regex=os.getenv(
-        "ALLOWED_ORIGIN_REGEX",
-        r"^https://opc-ai-agent-dashboard(-[a-z0-9]+)?-ninhs-projects-[a-z0-9]+\.vercel\.app$",
-    ),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 _supabase: Client | None = None
 _supabase_write: Client | None = None
 _auth_token = secrets.token_urlsafe(32)
@@ -200,6 +176,36 @@ async def require_login(request: Request, call_next):
                 return JSONResponse(status_code=401, content={"detail": "Phiên đăng nhập không hợp lệ."})
             return RedirectResponse(url="/", status_code=303)
     return await call_next(request)
+
+
+# QUAN TRỌNG: add CORSMiddleware SAU require_login để nó trở thành lớp bọc
+# ngoài cùng — nhờ vậy Access-Control-Allow-Origin luôn được gắn vào MỌI
+# response trả về (kể cả 401 do chưa đăng nhập), thay vì chỉ các response
+# đi xuyên qua được require_login. Nếu add trước, các lỗi 401 từ
+# require_login sẽ bị trình duyệt hiểu nhầm thành "blocked by CORS".
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://127.0.0.1:8000,http://localhost:8000",
+    ).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    # Cho phép mọi preview deployment của riêng project Vercel này
+    # (dạng https://opc-ai-agent-dashboard-<hash>-ninhs-projects-....vercel.app),
+    # chứ không phải mọi domain *.vercel.app trên đời — vẫn an toàn.
+    allow_origin_regex=os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"^https://opc-ai-agent-dashboard(-[a-z0-9]+)?-ninhs-projects-[a-z0-9]+\.vercel\.app$",
+    ),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def required_env(name: str) -> str:
