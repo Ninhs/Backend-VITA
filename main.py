@@ -52,6 +52,13 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    # Cho phép mọi preview deployment của riêng project Vercel này
+    # (dạng https://opc-ai-agent-dashboard-<hash>-ninhs-projects-....vercel.app),
+    # chứ không phải mọi domain *.vercel.app trên đời — vẫn an toàn.
+    allow_origin_regex=os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"^https://opc-ai-agent-dashboard(-[a-z0-9]+)?-ninhs-projects-[a-z0-9]+\.vercel\.app$",
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,6 +67,7 @@ app.add_middleware(
 _supabase: Client | None = None
 _supabase_write: Client | None = None
 _auth_token = secrets.token_urlsafe(32)
+_approve300_by_contract: dict[str, bool] = {}
 AUTH_COOKIE = "vita_session"
 
 
@@ -77,9 +85,17 @@ class AnalyzePayload(BaseModel):
     approve300: bool = False
 
 
+class CrisisPayload(BaseModel):
+    deadline_change: str = Field(default="", max_length=2000)
+    crisis_cost_pct: str = Field(default="", max_length=2000)
+    crisis_payment_delay: str = Field(default="", max_length=2000)
+    finance_condition_change: str = Field(default="", max_length=2000)
+
+
 class FounderDecisionPayload(BaseModel):
     founder_decision: Literal["approve", "request_more_info", "reject"]
     external_send_confirmation: Literal["confirm", "cancel"] | None = None
+    rejection_reason: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 class LoginPayload(BaseModel):
@@ -167,11 +183,6 @@ def is_authenticated(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    if request.method == "OPTIONS":
-        # Preflight CORS: không kèm cookie, không phải request thật -> luôn cho qua
-        # để CORSMiddleware gắn đúng header Access-Control-Allow-Origin.
-        return await call_next(request)
-
     path = request.url.path
     public_paths = {"/", "/health", "/api/auth/login"}
     public_prefixes = ("/UI/login",)
@@ -241,6 +252,10 @@ def contract_table() -> str:
 
 def contract_id_column() -> str:
     return os.getenv("SUPABASE_CONTRACT_ID_COLUMN", "contract_id").strip()
+
+
+def analysis_table() -> str:
+    return os.getenv("SUPABASE_ANALYSIS_TABLE", "agent_analysis_results").strip()
 
 
 def credit_profile_table() -> str:
@@ -493,22 +508,34 @@ def login_page(request: Request):
 
 @app.get("/dashboard", include_in_schema=False)
 def frontend_page() -> FileResponse:
-    return FileResponse(UI_DIR / "index.html")
+    return FileResponse(UI_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/UI/login.css", include_in_schema=False)
 def login_css() -> FileResponse:
-    return FileResponse(UI_DIR / "login.css", media_type="text/css")
+    return FileResponse(
+        UI_DIR / "login.css",
+        media_type="text/css",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/UI/login.js", include_in_schema=False)
 def login_js() -> FileResponse:
-    return FileResponse(UI_DIR / "login.js", media_type="application/javascript")
+    return FileResponse(
+        UI_DIR / "login.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/UI/style.css", include_in_schema=False)
 def frontend_css() -> FileResponse:
-    return FileResponse(UI_DIR / "style.css", media_type="text/css")
+    return FileResponse(
+        UI_DIR / "style.css",
+        media_type="text/css",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/UI/frontend.js", include_in_schema=False)
@@ -516,6 +543,7 @@ def frontend_js() -> FileResponse:
     return FileResponse(
         UI_DIR / "frontend.js",
         media_type="application/javascript",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -551,8 +579,8 @@ def login(payload: LoginPayload) -> JSONResponse:
         key=AUTH_COOKIE,
         value=_auth_token,
         httponly=True,
-        samesite=os.getenv("COOKIE_SAMESITE", "none"),
-        secure=os.getenv("COOKIE_SECURE", "true").lower() == "true",
+        samesite="lax",
+        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
         max_age=8 * 60 * 60,
     )
     return response
@@ -728,11 +756,103 @@ def get_contract(contract_id: str) -> dict[str, Any]:
     return {"data": contract}
 
 
+def save_analysis_snapshot(
+    contract_id: str,
+    outputs: dict[str, Any],
+    dify_response: dict[str, Any],
+    compliance: dict[str, Any],
+    approve300: bool,
+) -> None:
+    """Lưu kết quả Dify vào Supabase để lần sau xem lại hợp đồng không cần chạy lại Agent.
+
+    Không ném lỗi ra ngoài: nếu chưa cấu hình SUPABASE_SECRET_KEY/SERVICE_ROLE_KEY hoặc
+    bảng chưa tồn tại, chỉ log cảnh báo — không làm hỏng response chính của analyze_contract.
+    """
+
+    if not supabase_write_is_configured():
+        return
+
+    workflow_run_id = dify_response.get("workflow_run_id") or (dify_response.get("data") or {}).get("id")
+    record = {
+        "contract_id": contract_id,
+        "outputs": outputs,
+        "dify_response": dify_response,
+        "compliance": compliance,
+        "approve300": approve300,
+        "workflow_run_id": workflow_run_id,
+        "status": outputs.get("status"),
+    }
+
+    try:
+        get_supabase_write_client().table(analysis_table()).insert(record).execute()
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ Không lưu được kết quả phân tích vào Supabase ({analysis_table()}): {exc}")
+
+
+@app.get("/api/contracts/{contract_id}/analysis")
+def get_cached_analysis(contract_id: str) -> dict[str, Any]:
+    """Đọc kết quả Dify đã lưu ở lần 'Chạy AI Agent' gần nhất — không tốn quota Dify."""
+
+    contract_id = normalize_contract_id(contract_id)
+    try:
+        contract = fetch_contract(contract_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Lỗi Supabase: {exc}") from exc
+
+    if contract is None:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy hợp đồng {contract_id}")
+
+    case_data = build_case_data(contract_id, contract)
+
+    try:
+        response = (
+            get_supabase_client()
+            .table(analysis_table())
+            .select("*")
+            .eq("contract_id", contract_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Không đọc được kết quả đã lưu từ bảng {analysis_table()}: {exc}. "
+                "Hãy chạy file create_agent_analysis_results.sql trên Supabase trước."
+            ),
+        ) from exc
+
+    rows = response.data or []
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Chưa có kết quả đã lưu cho {contract_id}. Hãy bấm “Chạy AI Agent”.",
+        )
+
+    row = rows[0]
+    approve300 = bool(row.get("approve300", False))
+    _approve300_by_contract[contract_id] = approve300
+
+    return {
+        "contract": contract,
+        "case_data": case_data,
+        "outputs": row.get("outputs") or {},
+        "compliance": row.get("compliance") or {},
+        "dify_response": row.get("dify_response") or {},
+        "approve300": approve300,
+        "cached": True,
+        "cached_at": row.get("created_at"),
+    }
+
+
 @app.post("/api/agent/analyze/{contract_id}")
 def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) -> dict[str, Any]:
     """Lấy hợp đồng từ Supabase, gửi sang Dify và in outputs ra Terminal."""
 
     contract_id = normalize_contract_id(contract_id)
+    approve300 = payload.approve300 if payload else False
+    _approve300_by_contract[contract_id] = approve300
 
     try:
         contract = fetch_contract(contract_id)
@@ -759,7 +879,8 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
             contract_id=contract_id,
             case_data=case_data,
             extra_inputs={
-                "approve300": payload.approve300 if payload else False,
+                "action": "prepare",
+                "approve300": approve300,
             },
         )
         outputs = extract_outputs(dify_response)
@@ -772,6 +893,14 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
         print("-" * 72)
         print_rr002_assessment(rr002_assessment)
         print("=" * 72 + "\n")
+
+        save_analysis_snapshot(
+            contract_id,
+            outputs,
+            dify_response,
+            {"rr_002": rr002_assessment},
+            approve300,
+        )
 
     except Exception as exc:  # Bắt mọi lỗi từ Dify (chưa có key, timeout, v.v.)
         print(f"⚠️ Dify Agent chưa sẵn sàng hoặc lỗi: {exc}")
@@ -792,16 +921,64 @@ def analyze_contract(contract_id: str, payload: AnalyzePayload | None = None) ->
     }
 
 
+@app.post("/api/agent/crisis/{contract_id}")
+def run_crisis_card(contract_id: str, payload: CrisisPayload) -> dict[str, Any]:
+    """Gửi các thay đổi dạng văn bản của Crisis Card sang Dify."""
+
+    contract_id = normalize_contract_id(contract_id)
+    try:
+        contract = fetch_contract(contract_id)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Lỗi Supabase: {exc}") from exc
+
+    if contract is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Không tìm thấy hợp đồng {contract_id}",
+        )
+
+    case_data = build_case_data(contract_id, contract)
+    crisis_inputs = {
+        "action": "prepare",
+        "approve300": True,
+        "deadline_change": payload.deadline_change,
+        "crisis_cost_pct": payload.crisis_cost_pct,
+        "crisis_payment_delay": payload.crisis_payment_delay,
+        "finance_condition_change": payload.finance_condition_change,
+    }
+
+    try:
+        dify_response = DifyWorkflowClient().run_workflow(
+            contract_id=contract_id,
+            case_data=case_data,
+            extra_inputs=crisis_inputs,
+        )
+    except DifyClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Dify Crisis Card lỗi: {exc}") from exc
+
+    _approve300_by_contract[contract_id] = True
+    return {
+        "contract_id": contract_id,
+        "approve300": True,
+        "outputs": extract_outputs(dify_response),
+        "dify_response": dify_response,
+    }
+
+
 @app.post("/api/agent/founder-decision/{contract_id}")
 def run_founder_decision(contract_id: str, payload: FounderDecisionPayload) -> dict[str, Any]:
     """Gửi quyết định của Founder sang Agent 2; API key không bao giờ đi xuống frontend."""
     contract_id = normalize_contract_id(contract_id)
     inputs: dict[str, Any] = {
         "contract_id": contract_id,
+        "action": "finalize",
+        "approve300": _approve300_by_contract.get(contract_id, False),
         "founder_decision": payload.founder_decision,
     }
-    if payload.external_send_confirmation:
+    if payload.external_send_confirmation is not None:
         inputs["external_send_confirmation"] = payload.external_send_confirmation
+    if payload.founder_decision == "reject" and payload.rejection_reason is not None:
+        inputs["rejection_reason"] = payload.rejection_reason
     try:
         response = DifyWorkflowClient(api_key_env="DIFY_API_KEY_2").run_with_inputs(inputs=inputs)
     except DifyClientError as exc:
