@@ -501,9 +501,7 @@ def rollback_created_rows(rows: list[tuple[str, str, str]]) -> list[str]:
     return errors
 
 
-# -----------------------------------------------------------------------------
 # Phục vụ frontend cùng origin với backend
-# -----------------------------------------------------------------------------
 @app.get("/UI/add_contract.html", include_in_schema=False)
 def add_contract_html() -> FileResponse:
     return FileResponse(UI_DIR / "add_contract.html")
@@ -569,9 +567,7 @@ def guarantee_profile_document() -> FileResponse:
     )
 
 
-# -----------------------------------------------------------------------------
 # API
-# -----------------------------------------------------------------------------
 
 
 @app.get("/health")
@@ -588,12 +584,16 @@ def login(payload: LoginPayload) -> JSONResponse:
     if not (username_ok and password_ok):
         raise HTTPException(status_code=401, detail="Tên đăng nhập hoặc mật khẩu không đúng.")
     response = JSONResponse({"success": True, "message": "Đăng nhập thành công."})
+    # Frontend (Vercel) và backend (Render) khác domain nhau => cross-site.
+    # Trình duyệt CHỈ gửi cookie cross-site khi SameSite=None, và SameSite=None
+    # bắt buộc phải đi kèm Secure=True (browser sẽ tự chặn nếu thiếu Secure).
+    cross_site = os.getenv("COOKIE_CROSS_SITE", "true").lower() == "true"
     response.set_cookie(
         key=AUTH_COOKIE,
         value=_auth_token,
         httponly=True,
-        samesite="lax",
-        secure=os.getenv("COOKIE_SECURE", "false").lower() == "true",
+        samesite="none" if cross_site else "lax",
+        secure=True if cross_site else (os.getenv("COOKIE_SECURE", "false").lower() == "true"),
         max_age=8 * 60 * 60,
     )
     return response
