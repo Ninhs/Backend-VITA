@@ -68,6 +68,10 @@ class CrisisPayload(BaseModel):
     finance_condition_change: str = Field(default="", max_length=2000)
 
 
+class CrisisParsePayload(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class FounderDecisionPayload(BaseModel):
     founder_decision: Literal["approve", "request_more_info", "reject"]
     external_send_confirmation: Literal["confirm", "cancel"] | None = None
@@ -975,6 +979,37 @@ def run_crisis_card(contract_id: str, payload: CrisisPayload) -> dict[str, Any]:
         "approve300": True,
         "outputs": extract_outputs(dify_response),
         "dify_response": dify_response,
+    }
+
+
+@app.post("/api/crisis/parse")
+def parse_crisis_card(payload: CrisisParsePayload) -> dict[str, Any]:
+    """Dùng OpenAI (qua Dify) tách câu mô tả Crisis Card thành 4 trường để Founder xác nhận."""
+
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Hãy nhập nội dung Crisis Card.")
+
+    try:
+        response = DifyWorkflowClient(api_key_env="DIFY_API_KEY_3").run_with_inputs(
+            inputs={"crisis_text": text},
+        )
+    except DifyClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Không đọc được Crisis Card: {exc}") from exc
+
+    outputs = extract_outputs(response)
+    return {
+        "status": outputs.get("status", "empty"),
+        "source": outputs.get("source", "openai"),
+        "fact_count": outputs.get("fact_count", 0),
+        "fields": {
+            "deadline_change": outputs.get("deadline_change", ""),
+            "crisis_cost_pct": outputs.get("crisis_cost_pct", ""),
+            "crisis_payment_delay": outputs.get("crisis_payment_delay", ""),
+            "finance_condition_change": outputs.get("finance_condition_change", ""),
+        },
+        "facts": outputs.get("facts") or [],
+        "warnings": outputs.get("warnings") or [],
     }
 
 
